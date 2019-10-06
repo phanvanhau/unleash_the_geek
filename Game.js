@@ -26,6 +26,7 @@ const ITEM_TAKER = 0;
 const TRAP_RADAR_THRES = 3;
 const TRAP_ORE_THRES = 8;
 const FIXED_NB_TRAPS = 4;
+const MAX_ORE_LIMIT = 10;
 
 class Pos {
     constructor(x, y) {
@@ -49,7 +50,9 @@ class Pos {
         const dist = this.distance(pos);
         return parseInt(dist / 4) + (dist % 4 > 0 ? 1 : 0);
     }
-
+    isValid(x, y) {
+        return this.x >= 0 && this.x <30 && this.y >= 0 && this.y <15;
+    }
 }
 
 class Entity extends Pos {
@@ -122,6 +125,50 @@ class Robot extends Entity {
 
 }
 
+class Radar extends Entity {
+    constructor(x, y, type, id) {
+        super(x, y, type, id);
+        this.oreAmount = 0;
+        this.arrayOfCells = [];
+    }
+
+    updateOreAmount(grid, allTraps) {
+        this.oreAmount = this.countOreAround(grid, allTraps);
+    }
+
+    countOreAround(grid, allTraps) {
+        this.arrayOfCells = [];
+        let count = 0;
+        for(var i = this.x - 2; i <= this.x + 2; i++) {
+            for(var j = this.y - 1; j <= this.y + 1; j++) {
+                const cell = grid.getCell(i,j);
+                if (cell && !allTraps.some(t => t.isSame(cell)) && cell.getOre() > 0) {
+                    count += cell.getOre();
+                    this.arrayOfCells.push(cell);
+                }
+            }   
+        }
+    }
+
+    getMaxOreCell() {
+        let maxCell, maxCellOre = 0;
+        for(var i = this.x - 2; i <= this.x + 2; i++) {
+            for(var j = this.y - 1; j <= this.y + 1; j++) {
+                const cell = grid.getCell(i,j);
+                if (cell && cell.getOre() > maxCellOre){
+                    maxCell = cell;
+                    maxCellOre = cell.getOre();
+                }
+            }
+        }
+        return maxCell;
+    }
+
+    getArrayOfCells(){
+        return this.arrayOfCells;
+    }
+}
+
 class Cell extends Pos {
     constructor(ore, hole, x, y) {
         super(x, y);
@@ -185,19 +232,15 @@ class Game {
         this.trapCooldown = 0;
         this.tasks = [];
         this.maintainedRadarPos = [
-            // {x: 4, y: 2, isTaken: false},
-            // {x: 4, y: 7, isTaken: false},
-            {x: 9, y: 7, isTaken: false},
-            {x: 5, y: 3, isTaken: false},
-            {x: 5, y: 11, isTaken: false},
-            {x: 12, y: 2, isTaken: false},
-            {x: 12, y: 12, isTaken: false},
-            {x: 16, y: 7, isTaken: false},
-            {x: 20, y: 2, isTaken: false},
-            {x: 20, y: 12, isTaken: false},
-            {x: 24, y: 7, isTaken: false},
-            // {x: 28, y: 2},
-            // {x: 28, y: 12},
+            new Pos(9, 7),
+            new Pos(5, 3),
+            new Pos(5, 11),
+            new Pos(12, 2),
+            new Pos(12, 12),
+            new Pos(16, 7),
+            new Pos(20, 2),
+            new Pos(20, 12),
+            new Pos(24, 7),
         ];
         this.fixedNbTraps = FIXED_NB_TRAPS;
         this.reset();
@@ -212,6 +255,7 @@ class Game {
         this.traps = [];
         this.myRobots = [];
         this.enemyRobots = [];
+        this.oreReservedRange = [];
     }
 
     updateTask(robot, task = null) {
@@ -290,6 +334,13 @@ class Game {
     isRadalCell(cell){
         return this.radars.some(r => r.isSame(cell));
     }
+
+    isCellInRestrictedRange(cell) {
+        return this.oreReservedRange.some(o => r.isSame(cell));
+    }
+    updateRadarRangeMap(radar) {
+        this.oreReservedRange = this.oreReservedRange.concat(radar.getArrayOfCells());
+    }    
 }
 
 let game = new Game();
@@ -332,13 +383,14 @@ while (true) {
         } else if (type === ROBOT_ENEMY) {
             game.enemyRobots.push(new Robot(x, y, type, id, item));
         } else if (type === RADAR) {
-            game.radars.push(new Entity(x, y, type, id));
+            game.radars.push(new Radar(x, y, type, id));
         } else if (type === TRAP) {
             game.traps.push(new Entity(x, y, type, id));
         }
-    }
+    }    
     
-    
+    game.radars.forEach(r => r.updateOreAmount(game.grid, game.traps));
+
     for (let i = 0; i < game.myRobots.length; i++) {
         const robot = game.myRobots[i];
         const currentTask = game.getCurrentTask(robot);
@@ -511,7 +563,7 @@ function getMoveFromOreCell(game, oreCells) {
         const dist = c.x;
         const countTargeting = game.countCellTargeted(c);
         // const step = c.getSteps(new Pos(0, c.y));
-        if ( dist < minDist && countTargeting === 0) {
+        if ( dist < minDist && countTargeting === 0 && !game.isCellInRestrictedRange(c)) {
             cell = c;
             minDist = dist;
         }
@@ -536,16 +588,30 @@ function getPossibleMoveExplore(game, robot, cells) {
 }
 
 function getMoveOre(game, robot, oreCells) {
-    let cell, minStep = 1000;
-    oreCells.forEach(c => {
-        const step = robot.getSteps(c);
-        const nbOre = c.getOre();
-        // see if our robot targeting this cell with store enough
-        const countTargeting = game.countCellTargeted(c);
-        if (step < minStep && countTargeting < nbOre && !game.isTrapCell(c)) {
-            cell = c;
-            minStep = step;
+    let radar, maxOreAmount = 0;
+    game.radars.forEach(r => {
+        const oreAmount = r.oreAmount;
+        if (oreAmount > maxOreAmount) {
+            radar = r;
+            maxOreAmount = oreAmount;
         }
     });
+    if (radar && maxOreAmount > MAX_ORE_LIMIT) {
+        game.updateRadarRangeMap(radar);
+        // target one of radar neighbors
+        cell = radar.getMaxOreCell();
+    } else {
+        let minStep = 1000;
+        oreCells.forEach(c => {
+            const step = robot.getSteps(c);
+            const nbOre = c.getOre();
+            // see if our robot targeting this cell with store enough
+            const countTargeting = game.countCellTargeted(c);
+            if (step < minStep && countTargeting < nbOre && !game.isTrapCell(c)) {
+                cell = c;
+                minStep = step;
+            }
+        });
+    }
     return cell;
 }
