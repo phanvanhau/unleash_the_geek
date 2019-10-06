@@ -24,7 +24,7 @@ const USELESS_ZONE_X = 2;
 const MAX_MOVE_IN_STEP = 4;
 const ITEM_TAKER = 0;
 const TRAP_RADAR_THRES = 3;
-const TRAP_ORE_THRES = 5;
+const TRAP_ORE_THRES = 8;
 const FIXED_NB_TRAPS = 4;
 
 class Pos {
@@ -187,8 +187,9 @@ class Game {
         this.maintainedRadarPos = [
             // {x: 4, y: 2, isTaken: false},
             // {x: 4, y: 7, isTaken: false},
-            {x: 12, y: 7, isTaken: false},
-            {x: 8, y: 7, isTaken: false},
+            {x: 9, y: 7, isTaken: false},
+            {x: 5, y: 3, isTaken: false},
+            {x: 5, y: 11, isTaken: false},
             {x: 12, y: 2, isTaken: false},
             {x: 12, y: 12, isTaken: false},
             {x: 16, y: 7, isTaken: false},
@@ -282,6 +283,13 @@ class Game {
         return this.myRobots.filter(r => !r.isDead()).length;
     }
 
+    isTrapCell(cell){
+        return this.traps.some(trap => trap.isSame(cell));
+    }
+
+    isRadalCell(cell){
+        return this.radars.some(r => r.isSame(cell));
+    }
 }
 
 let game = new Game();
@@ -334,11 +342,14 @@ while (true) {
     for (let i = 0; i < game.myRobots.length; i++) {
         const robot = game.myRobots[i];
         const currentTask = game.getCurrentTask(robot);
+        const trapInProgress = game.tasks
+            .filter(t => t.action === ACTION.DIG && t.item === TRAP)
+            .map(t => new Entity(t.target.x, t.target.y, TRAP, 'in progress trap'));
+        const allTraps = trapInProgress.concat(game.traps);
+        const oreCells = game.grid.cells.filter(cell => cell.x !== 0 && cell.ore !== '?' && parseInt(cell.ore) > 0 && !allTraps.some(t => t.isSame(cell)));
 
         if (currentTask) { // if robot has in progress task
-            if (isTaskDone(game, robot, currentTask)) {
-                // arrived at target
-                // game.updateTask(robot, new Task(robot.id, currentTask.item, currentTask.target, ACTION.DIG));
+            if (isTaskDone(game, robot, currentTask, oreCells)) {
                 // remove current Task
                 game.removeCurrentTask(robot);
             } else {
@@ -348,11 +359,6 @@ while (true) {
             }
         }
          // Check if any explored cell
-        const trapInProgress = game.tasks
-            .filter(t => t.action === ACTION.DIG && t.item === TRAP)
-            .map(t => new Entity(t.target.x, t.target.y, TRAP, 'in progress trap'));
-        const allTraps = trapInProgress.concat(game.traps);
-        const oreCells = game.grid.cells.filter(cell => cell.x !== 0 && cell.ore !== '?' && parseInt(cell.ore) > 0 && !allTraps.some(t => t.isSame(cell)));
         const hiddenCells = game.grid.cells.filter(cell => cell.x > USELESS_ZONE_X && cell.ore == '?' && !cell.hasHole()); // avoid first column as possibility to have trap
         if (robot.item == NONE) {
             if (processNone(game, robot, oreCells, hiddenCells)) { continue; }
@@ -374,27 +380,22 @@ while (true) {
             const cellsForTrap = oreCells.filter(c => c.getOre() >= 2 && c.x >= 4 && c.y <= 20);
             processTrap(game, robot, cellsForTrap, hiddenCells);
             continue;
-            
         }
-
-        // if (game.trapCooldown === 0) {
-        //     robot.request(TRAP, 'request trap');
-        //     game.trapCooldown = 5;
-        //     continue;
-        // }
 
         robot.wait(`Starter AI ${i}`);
     }
 }
 
-function isTaskDone(game, robot, task) {
+function isTaskDone(game, robot, task, oreCells) {
     switch (task.action) {
         case ACTION.MOVE:
             return task.target.isSame(robot);
         case ACTION.DIG:
-            return robot.item === ORE || (task.item === RADAR && robot.item === NONE)
+            return robot.item === ORE
+            || (task.item === RADAR && robot.item === NONE)
+            || (task.item === TRAP && robot.item === NONE)
             || (task.item === NONE && game.grid.getCell(task.target.x, task.target.y).hasHole())
-            || (task.item === TRAP && robot.item === NONE);
+            || (task.item === NONE && oreCells.length > 2 && game.grid.getCell(task.target.x, task.target.y).getOre() <= 0);
         case ACTION.WAIT:
             return true;
         case ACTION.REQUEST:
@@ -422,21 +423,13 @@ function processNone(game, robot, oreCells, hiddenCells) {
             return true;
         }
     }
-    if (hasRobotAtHome || oreCells.length) {
-        let target;
-        if (oreCells.length && (target = getMoveOre(game, robot, oreCells))) {
-            // const target = getMoveOre(game, robot, oreCells);
-            game.updateTask(robot, new Task(robot.id, NONE, target, ACTION.DIG, 'go to mine'));
-        }
-        else {
-            processExplore(game, robot, hiddenCells);
-        }
+    let target;
+    if (oreCells.length && (target = getMoveOre(game, robot, oreCells))) {
+      game.updateTask(robot, new Task(robot.id, NONE, target, ACTION.DIG, 'go to mine'));
+    } else if (robot.id === robotClosestHome.id && game.radarCooldown <= 1) {
+      game.updateTask(robot, new Task(robot.id, NONE, new Pos(0, robot.y), ACTION.MOVE, 'back home - item'));  
     } else {
-        if (robot.id === robotClosestHome.id && game.radarCooldown < 1) {
-            game.updateTask(robot, new Task(robot.id, NONE, new Pos(0, robot.y), ACTION.MOVE, 'back home - item'));
-        } else {
-            processExplore(game, robot, hiddenCells);
-        }
+      processExplore(game, robot, hiddenCells);
     }
     return true;
 }
@@ -466,8 +459,8 @@ function getMoveRadar(game, robot) {
         return new Pos(game.maintainedRadarPos[0].x, game.maintainedRadarPos[0].y)
     }
     let remainings = game.maintainedRadarPos
-            .filter(pos => !pos.isTaken && !game.radars.some(r => r.isSame(pos))
-                    && !game.traps.some(trap => trap.isSame(pos)));
+            .filter(pos => !pos.isTaken && !game.isRadalCell(pos)
+                    && !game.isTrapCell(pos));
     let cell, minDist = 1000;
     remainings.forEach(r => {
         const dist = robot.distance(r);
@@ -513,13 +506,14 @@ function processTrap(game, robot, oreCells, hiddenCells) {
  */
 function getMoveFromOreCell(game, oreCells) {
 	// find most ore cell within min distance
-    let cell, minStep = 1000;
+    let cell, minDist = 1000;
     oreCells.forEach(c => {
+        const dist = c.x;
         const countTargeting = game.countCellTargeted(c);
-        const step = c.getSteps(new Pos(0, c.y));
-        if(step < minStep && countTargeting === 0) {
+        // const step = c.getSteps(new Pos(0, c.y));
+        if ( dist < minDist && countTargeting === 0) {
             cell = c;
-            minStep = step;
+            minDist = dist;
         }
     });
     return cell;
@@ -532,7 +526,7 @@ function getPossibleMoveExplore(game, robot, cells) {
     cells.forEach(c => {
         const dist = robot.distance(c);
         const countTargeting = game.countCellTargeted(c);
-        if (( dist < minDist && countTargeting === 0 && !game.traps.some(trap => trap.isSame(c)))) {
+        if ( dist < minDist && countTargeting === 0 && !game.isTrapCell(c)) {
             cell = c;
             minDist = dist;
         }
@@ -548,7 +542,7 @@ function getMoveOre(game, robot, oreCells) {
         const nbOre = c.getOre();
         // see if our robot targeting this cell with store enough
         const countTargeting = game.countCellTargeted(c);
-        if (step < minStep && countTargeting < nbOre && !game.traps.some(trap => trap.isSame(c))) {
+        if (step < minStep && countTargeting < nbOre && !game.isTrapCell(c)) {
             cell = c;
             minStep = step;
         }
