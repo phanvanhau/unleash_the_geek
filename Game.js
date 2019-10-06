@@ -120,6 +120,10 @@ class Cell extends Pos {
         return this.hole === HOLE;
     }
 
+    getOre() {
+        return this.ore !== '?' ? parseInt(this.ore) : -1;
+    }
+
     update(ore, hole) {
         this.ore = ore;
         this.hole = hole;
@@ -169,17 +173,17 @@ class Game {
         this.trapCooldown = 0;
         this.tasks = [];
         this.maintainedRadarPos = [
-            {x: 2, y: 2, isTaken: false},
-            {x: 2, y: 12, isTaken: false},
-            {x: 6, y: 7, isTaken: false},
-            {x: 10, y: 2, isTaken: false},
-            {x: 10, y: 12, isTaken: false},
-            {x: 14, y: 7, isTaken: false},
-            {x: 18, y: 2, isTaken: false},
-            {x: 18, y: 12, isTaken: false},
-            {x: 22, y: 7, isTaken: false},
-            // {x: 26, y: 2},
-            // {x: 26, y: 12},
+            {x: 4, y: 2, isTaken: false},
+            {x: 4, y: 12, isTaken: false},
+            {x: 8, y: 7, isTaken: false},
+            {x: 12, y: 2, isTaken: false},
+            {x: 12, y: 12, isTaken: false},
+            {x: 16, y: 7, isTaken: false},
+            {x: 20, y: 2, isTaken: false},
+            {x: 20, y: 12, isTaken: false},
+            {x: 24, y: 7, isTaken: false},
+            // {x: 28, y: 2},
+            // {x: 28, y: 12},
         ];
         this.fixedNbTraps = FIXED_NB_TRAPS;
         this.reset();
@@ -323,7 +327,7 @@ while (true) {
             .map(t => new Entity(t.target.x, t.target.y, TRAP, 'in progress trap'));
         const allTraps = trapInProgress.concat(game.traps);
         const oreCells = game.grid.cells.filter(cell => cell.x !== 0 && cell.ore !== '?' && parseInt(cell.ore) > 0 && !allTraps.some(t => t.isSame(cell)));
-        const hiddenCells = game.grid.cells.filter(cell => cell.x >= 8 && cell.ore == '?' && !cell.hasHole()); // avoid first column as possibility to have trap
+        const hiddenCells = game.grid.cells.filter(cell => cell.x >= 4 && cell.ore == '?' && !cell.hasHole()); // avoid first column as possibility to have trap
         if (robot.item == NONE) {
             if (processNone(game, robot, oreCells, hiddenCells)) { continue; }
         }
@@ -390,15 +394,15 @@ function processNone(game, robot, oreCells, hiddenCells) {
     }
     if (hasRobotAtHome || oreCells.length) {
         if (oreCells.length) {
-            const target = getPossibleMoveExplore(game, robot, oreCells);
+            const target = getMoveOre(game, robot, oreCells);
             game.updateTask(robot, new Task(robot.id, NONE, target, ACTION.DIG, 'go to mine'));
         }
         else {
             processExplore(game, robot, hiddenCells);
         }
     } else {
-        if (robot.id === robotClosestHome.id) {
-            game.updateTask(robot, new Task(robot.id, NONE, new Pos(0, robot.y), ACTION.MOVE, 'nothing todo, go back home'));
+        if (robot.id === robotClosestHome.id && game.radarCooldown === 1) {
+            game.updateTask(robot, new Task(robot.id, NONE, new Pos(0, robot.y), ACTION.MOVE, 'back home - item'));
         } else {
             processExplore(game, robot, hiddenCells);
         }
@@ -443,7 +447,8 @@ function processTrap(game, robot, oreCells, hiddenCells) {
     if (oreCells.length) {
         // find furthest ore cell
         let furthestCell, maxDist = 0;
-        oreCells.forEach(c => {
+        const muchOreCells = oreCells.filter(c => c.getOre() >= 2);
+        (muchOreCells.length ? muchOreCells : oreCells).forEach(c => {
             if(c.x > maxDist) {
                 furthestCell = c;
                 maxDist = c.x;
@@ -463,6 +468,19 @@ function getPossibleMoveExplore(game, robot, cells) {
         if (( dist < minDist && !game.traps.some(trap => trap.isSame(c)))) {
             cell = c;
             minDist = dist;
+        }
+    });
+    return cell;
+}
+
+function getMoveOre(game, robot, oreCells) {
+    let cell, minStep = 1000;
+    oreCells.forEach(c => {
+        const dist = robot.distance(c);
+        const step = parseInt(dist / 4) + (dist % 4 > 0 ? 1 : 0);
+        if (( step < minStep || (step === minStep && cell && c.getOre() > cell.getOre())) && !game.traps.some(trap => trap.isSame(c))) {
+            cell = c;
+            minStep = step;
         }
     });
     return cell;
