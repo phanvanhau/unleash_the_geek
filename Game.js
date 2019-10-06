@@ -20,6 +20,8 @@ const ACTION = {
     REQUEST: 'REQUEST'
 };
 
+const USELESS_ZONE_X = 2;
+const MAX_MOVE_IN_STEP = 4;
 const ITEM_TAKER = 0;
 const TRAP_RADAR_THRES = 3;
 const TRAP_ORE_THRES = 5;
@@ -124,7 +126,6 @@ class Cell extends Pos {
     constructor(ore, hole, x, y) {
         super(x, y);
         this.update(ore, hole);
-        this.isTargeted = false;
     }
 
     hasHole() {
@@ -138,7 +139,6 @@ class Cell extends Pos {
     update(ore, hole) {
         this.ore = ore;
         this.hole = hole;
-        this.isTargeted = false;
     }
 }
 
@@ -176,6 +176,7 @@ class Task {
 
 class Game {
     constructor() {
+        this.turn = 0;
         this.grid = new Grid();
         this.grid.init();
         this.myScore = 0;
@@ -185,7 +186,8 @@ class Game {
         this.tasks = [];
         this.maintainedRadarPos = [
             // {x: 4, y: 2, isTaken: false},
-            {x: 4, y: 7, isTaken: false},
+            // {x: 4, y: 7, isTaken: false},
+            {x: 12, y: 7, isTaken: false},
             {x: 8, y: 7, isTaken: false},
             {x: 12, y: 2, isTaken: false},
             {x: 12, y: 12, isTaken: false},
@@ -198,6 +200,10 @@ class Game {
         ];
         this.fixedNbTraps = FIXED_NB_TRAPS;
         this.reset();
+    }
+
+    incrementTurn() {
+        this.turn++;
     }
 
     reset() {
@@ -283,6 +289,7 @@ let game = new Game();
 
 // game loop
 while (true) {
+    game.incrementTurn();
     let inputsScore = readline().split(' ');
     game.myScore = parseInt(inputsScore[0]); // Players score
     game.enemyScore = parseInt(inputsScore[1]);
@@ -346,7 +353,7 @@ while (true) {
             .map(t => new Entity(t.target.x, t.target.y, TRAP, 'in progress trap'));
         const allTraps = trapInProgress.concat(game.traps);
         const oreCells = game.grid.cells.filter(cell => cell.x !== 0 && cell.ore !== '?' && parseInt(cell.ore) > 0 && !allTraps.some(t => t.isSame(cell)));
-        const hiddenCells = game.grid.cells.filter(cell => cell.x >= 4 && cell.ore == '?' && !cell.hasHole()); // avoid first column as possibility to have trap
+        const hiddenCells = game.grid.cells.filter(cell => cell.x > USELESS_ZONE_X && cell.ore == '?' && !cell.hasHole()); // avoid first column as possibility to have trap
         if (robot.item == NONE) {
             if (processNone(game, robot, oreCells, hiddenCells)) { continue; }
         }
@@ -401,12 +408,14 @@ function processNone(game, robot, oreCells, hiddenCells) {
     hasRobotAtHome = game.myRobots.some(r => r.isAtHome());
     robotClosestHome = game.getRobotClosestHome();
     if (robot.isAtHome()) {
-        if (game.radarCooldown === 0 && game.radars.length < game.maintainedRadarPos.length) {
+        const nbRadars = game.radars.length + game.tasks.filter(t => t.item === RADAR && t.action === ACTION.DIG);
+        const nbTraps = game.traps.length + game.tasks.filter(t => t.item === TRAP && t.action === ACTION.DIG);
+        if (game.radarCooldown === 0 && nbRadars < game.maintainedRadarPos.length) {
             game.updateTask(robot, new Task(robot.id, RADAR, new Pos(0, robot.y), ACTION.REQUEST, 'request radar'));
             game.radarCooldown = 5;
             return true;
-        } else if (robot.isAtHome() && game.trapCooldown === 0 && game.countAliveRobot() > 3
-                    && game.traps.length < game.fixedNbTraps &&
+        } else if (game.trapCooldown === 0 && game.countAliveRobot() > 3
+                    && nbTraps < game.fixedNbTraps &&
                     (oreCells.length >= TRAP_ORE_THRES|| game.radars.length >= TRAP_RADAR_THRES)) {
             game.updateTask(robot, new Task(robot.id, TRAP, new Pos(0, robot.y), ACTION.REQUEST, 'request trap'));
             game.trapCooldown = 5;
@@ -433,8 +442,12 @@ function processNone(game, robot, oreCells, hiddenCells) {
 }
 
 function processExplore(game, robot, cells) {
-    const hiddenC = getPossibleMoveExplore(game, robot, cells);
-    hiddenC.isTargeted = true;
+    let hiddenC;
+    if (game.turn === 1) {
+        hiddenC = game.grid.getCell(robot.x + 4, robot.y);
+    } else {
+        hiddenC = getPossibleMoveExplore(game, robot, cells);
+    }
     // game.updateTask(robot, new Task(robot.id, NONE, hiddenC, ACTION.MOVE, 'just move'));
     game.updateTask(robot, new Task(robot.id, NONE, hiddenC, ACTION.DIG, 'go to explore'));
 }
@@ -518,11 +531,13 @@ function getPossibleMoveExplore(game, robot, cells) {
     let cell, minDist = 1000;
     cells.forEach(c => {
         const dist = robot.distance(c);
-        if (( dist < minDist && !game.traps.some(trap => trap.isSame(c)))) {
+        const countTargeting = game.countCellTargeted(c);
+        if (( dist < minDist && countTargeting === 0 && !game.traps.some(trap => trap.isSame(c)))) {
             cell = c;
             minDist = dist;
         }
     });
+    console.error(`robot ${robot.id} at pos(${robot.x}, ${robot.y}) explore (${cell.x}, ${cell.y}) with dist ${minDist}`);
     return cell;
 }
 
