@@ -25,7 +25,7 @@ const MAX_MOVE_IN_STEP = 4;
 const ITEM_TAKER = 0;
 const TRAP_RADAR_THRES = 3;
 const TRAP_ORE_THRES = 8;
-const FIXED_NB_TRAPS = 4;
+const FIXED_NB_TRAPS = 3;
 
 class Pos {
     constructor(x, y) {
@@ -437,7 +437,7 @@ function processNone(game, robot, oreCells, hiddenCells) {
 function processExplore(game, robot, cells) {
     let hiddenC;
     if (game.turn === 1) {
-        hiddenC = game.grid.getCell(robot.x + 4, robot.y);
+        hiddenC = game.grid.getCell(robot.x + 8, robot.y);
     } else {
         hiddenC = getPossibleMoveExplore(game, robot, cells);
     }
@@ -458,18 +458,49 @@ function getMoveRadar(game, robot) {
     if (game.radars.length === 0) {
         return new Pos(game.maintainedRadarPos[0].x, game.maintainedRadarPos[0].y)
     }
-    let remainings = game.maintainedRadarPos
-            .filter(pos => !pos.isTaken && !game.isRadalCell(pos)
-                    && !game.isTrapCell(pos));
     let cell, minDist = 1000;
-    remainings.forEach(r => {
+    let index;
+    for(let i = 0; i < game.maintainedRadarPos.length; i++) {
+        const r = game.maintainedRadarPos[i];
+        if (r.isTaken || game.isRadalCell(r) || game.isTrapCell(r)) {
+            continue;
+        }
         const dist = robot.distance(r);
         if (dist < minDist) {
             minDist = dist;
             cell = r;
+            index = i;
         }
-    });
-    return cell ? new Pos(cell.x, cell.y) : null;
+    }
+    if (!cell) {
+        return null;
+    }
+    cell = optimizeRadarPos(new Pos(cell.x, cell.y), game, robot);
+    game.maintainedRadarPos[index] = { ...game.maintainedRadarPos[index], x: cell.x, y: cell.y};
+    console.error(`Update at ${index} is ${game.maintainedRadarPos[index]}`);
+    return cell;
+}
+
+/**
+ * calculate approximavive pos for minimizing step
+ */
+function optimizeRadarPos(cell, game, robot) {
+    console.error(`Optimize robot radar ${robot.id} at ${robot.x} - ${robot.y}`);
+    let mod = robot.distance(cell) % MAX_MOVE_IN_STEP;
+    let toggle = true;
+    const deltaY = cell.y < robot.y ? -1 : 1;
+    while(mod > 0) {
+        console.error(`Mod ${robot.distance(cell)} is ${mod}`);
+        console.error('optimize radar pos', cell.x, '-', cell.y);
+        if (toggle) {
+            cell = game.grid.getCell(cell.x - 1, cell.y);
+        } else {
+            cell = game.grid.getCell(cell.x, cell.y - deltaY);
+        }
+        mod = robot.distance(cell) % MAX_MOVE_IN_STEP;
+        toggle = !toggle;
+    }
+    return cell;
 }
 
 // function processTrap(game, robot, oreCells, hiddenCells) {
@@ -506,14 +537,24 @@ function processTrap(game, robot, oreCells, hiddenCells) {
  */
 function getMoveFromOreCell(game, oreCells) {
 	// find most ore cell within min distance
-    let cell, minDist = 1000;
+    // let cell, minDist = 1000;
+    // oreCells.forEach(c => {
+    //     const dist = c.x;
+    //     const countTargeting = game.countCellTargeted(c);
+    //     // const step = c.getSteps(new Pos(0, c.y));
+    //     if ( dist < minDist && countTargeting === 0) {
+    //         cell = c;
+    //         minDist = dist;
+    //     }
+    // });
+    let cell, maxDist = 0;
     oreCells.forEach(c => {
         const dist = c.x;
         const countTargeting = game.countCellTargeted(c);
         // const step = c.getSteps(new Pos(0, c.y));
-        if ( dist < minDist && countTargeting === 0) {
+        if ( dist > maxDist && countTargeting === 0) {
             cell = c;
-            minDist = dist;
+            maxDist = dist;
         }
     });
     return cell;
